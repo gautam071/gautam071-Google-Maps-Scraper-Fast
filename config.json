@@ -1,0 +1,13 @@
+{
+  "categories": [
+    "towels",
+    "Bamboo"
+  ],
+
+  "target_locations": [
+    "Vennandur",
+    "Salem",
+    "Erode"
+  ],
+  "csv_filename": "places_data.csv"
+}
