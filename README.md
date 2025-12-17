@@ -2,41 +2,37 @@
 
 ## Overview
 This project is a **fast Google Maps scraper built with Selenium (Python 3)**.  
-It searches Google Maps using **categories (keywords)** and **target locations** from a `config.json` file and extracts only the **most important business data** at high speed.
+It searches Google Maps using keywords and cities defined in a `config.json` file, extracts essential business details, and saves them into a CSV file.
 
-The scraper is optimized to:
-- Avoid slow scrolling logic
-- Click results quickly
-- Save data reliably to CSV
-- Handle “no results” cases safely
-- Work without hard-coding brand filters (no Zudio / Allen Solly lists)
-
-This tool is ideal for **B2B lead generation**, **local business research**, and **market mapping**.
+The scraper is optimized for **speed**, avoids unnecessary deep scraping, and focuses only on **mandatory business data** useful for lead generation and analysis.
 
 ---
 
 ## Features
-- 🚀 Fast Google Maps scraping (no infinite scroll)
-- 📁 Uses `config.json` for categories, locations, and output file
-- 🧾 Saves data incrementally to CSV (no data loss)
-- 📞 Extracts phone numbers when available
-- 🌐 Extracts website (optional)
-- 🔗 Saves Google Maps share link
-- 🏷️ Stores keyword & city used for search
-- ⚠️ Handles empty / no-result searches gracefully
-- ❌ No hard-coded brand filtering
+- Fast Google Maps search using keywords + city
+- Reads configuration from `config.json`
+- Appends data into a single CSV file
+- Extracts only essential fields (no heavy panel scraping)
+- Gracefully handles:
+  - No results
+  - Partial results
+  - Missing phone / website
+- Designed for **Python 3**
+- Headless Chrome supported
 
 ---
 
 ## Mandatory Fields Collected
-The scraper guarantees these fields (when available):
+The scraper saves the following fields:
 
-- `name` – Business name  
-- `phone` – Phone number  
-- `website` – Website URL (optional)  
-- `googlemaps_link` – Google Maps share link  
-- `keyword` – Search keyword/category  
-- `city` – Target city/location  
+| Field | Description |
+|-----|------------|
+| `name` | Business name |
+| `phone` | Phone number (if available) |
+| `website` | Website URL (optional) |
+| `googlemaps_link` | Google Maps share/page URL |
+| `keyword` | Search keyword used |
+| `city` | City / location used |
 
 ---
 
@@ -45,16 +41,8 @@ The scraper guarantees these fields (when available):
 Before running the script, ensure you have:
 
 - **Python 3.8+**
-- **Google Chrome (latest)**
+- **Google Chrome**
 - **ChromeDriver** (matching your Chrome version)
 - Python packages:
   ```bash
   pip install selenium
-
-## Project Structure :
-Google-Maps-Scraper-Fast/
-│
-├── data-entry.py        # Main scraper script
-├── config.json          # Configuration file
-├── output.csv           # Generated automatically
-└── README.md
