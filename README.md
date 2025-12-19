@@ -46,3 +46,7 @@ Before running the script, ensure you have:
 - Python packages:
   ```bash
   pip install selenium
+
+- **Things need to create in code base**
+    - config.json
+    - places_data.csv
