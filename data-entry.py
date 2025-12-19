@@ -63,6 +63,39 @@ def search(driver, keyword, city):
 
     time.sleep(4)  # allow results to load
 
+# ---------------- RELEVENT BUSINESS ---------------- #
+
+def is_relevant_business(name, keyword, driver):
+    """
+    Returns True if business looks like a manufacturer / textile unit,
+    False if it looks like a clothing retail store
+    """
+
+    name_l = name.lower()
+    keyword_l = keyword.lower()
+
+    # --- 1️⃣ Must loosely match search intent ---
+    if not any(k in name_l for k in keyword_l.split()):
+        return False
+
+    # --- 2️⃣ Exclude retail-only patterns (logic based) ---
+    retail_patterns = [
+        r"\b(store|showroom|boutique|mall|fashion|clothing|apparel|wear)\b"
+    ]
+
+    for pattern in retail_patterns:
+        if re.search(pattern, name_l):
+            return False
+
+    # --- 3️⃣ Check Google Maps category (if visible) ---
+    category_elements = driver.find_elements(By.CSS_SELECTOR, "button[jsaction*='pane.rating.category']")
+    if category_elements:
+        category_text = category_elements[0].text.lower()
+        if any(x in category_text for x in ["clothing", "apparel", "fashion", "store"]):
+            return False
+
+    return True
+
 # ---------------- FAST SCRAPER ---------------- #
 
 def scrape_fast(driver, keyword, city, csv_filename):
@@ -97,6 +130,10 @@ def scrape_fast(driver, keyword, city, csv_filename):
             web_el = driver.find_elements(By.CSS_SELECTOR, 'a[data-item-id="authority"]')
             if web_el:
                 website = web_el[0].get_attribute("href")
+
+            if not is_relevant_business(name, keyword, driver):
+                print(f"⏭️ Skipped (irrelevant): {name}")
+                continue
 
             data = {
                 "name": name,

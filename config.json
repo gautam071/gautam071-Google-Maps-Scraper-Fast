@@ -1,13 +1,19 @@
 {
   "categories": [
+    "textile ",
+    "textiles",
+    "fashion",
+    "tex",
+    "creation",
+    "weaving",
+    "handloom",
     "towels",
-    "Bamboo"
+    "lungi",
+    "bedsheets"
   ],
 
   "target_locations": [
-    "Vennandur",
-    "Salem",
-    "Erode"
+    "Somanur"
   ],
   "csv_filename": "places_data.csv"
 }
