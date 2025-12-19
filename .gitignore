@@ -1,2 +1,5 @@
 # Ignore specific data file
 places_data.csv
+
+#Variable Places
+config.json
