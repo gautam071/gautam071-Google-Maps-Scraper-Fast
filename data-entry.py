@@ -38,7 +38,8 @@ def save_to_csv(data, filename):
 
 def setup_driver():
     options = Options()
-    options.add_argument("--headless=new")
+    # ⚠️ Disable headless while testing share link
+    # options.add_argument("--headless=new")
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     options.add_argument("--window-size=1920,1080")
@@ -71,22 +72,15 @@ def search(driver, keyword, city):
 
     return True
 
-# ---------------- BUSINESS FILTER (FIXED) ---------------- #
+# ---------------- BUSINESS FILTER ---------------- #
 
 def is_relevant_business(name, driver):
-    """
-    KEEP all textile-related units
-    REMOVE only obvious retail / fashion stores
-    """
-
     name_l = name.lower()
 
-    # ❌ Strong retail-only exclusion
     retail_pattern = r"\b(store|showroom|boutique|mall|fashion|clothing|apparel|wear)\b"
     if re.search(retail_pattern, name_l):
         return False
 
-    # ❌ Google Maps category check (retail)
     try:
         category_el = driver.find_elements(By.CSS_SELECTOR, "button[jsaction*='pane.rating.category']")
         if category_el:
@@ -96,8 +90,38 @@ def is_relevant_business(name, driver):
     except:
         pass
 
-    # ✅ Everything else is allowed (textile-friendly)
     return True
+
+# ---------------- SHARE LINK ---------------- #
+
+def get_share_link(driver):
+    """
+    Get Google Maps Share link for the currently opened place.
+    """
+    try:
+        share_btn = WebDriverWait(driver, 5).until(
+            EC.element_to_be_clickable(
+                (By.CSS_SELECTOR, 'button[jsaction*="pane.share"]')
+            )
+        )
+        share_btn.click()
+
+        link_input = WebDriverWait(driver, 5).until(
+            EC.presence_of_element_located(
+                (By.CSS_SELECTOR, 'input[aria-label="Link to share"]')
+            )
+        )
+
+        share_link = link_input.get_attribute("value")
+
+        # Close share dialog
+        link_input.send_keys(Keys.ESCAPE)
+        time.sleep(0.3)
+
+        return share_link.strip()
+
+    except Exception:
+        return ""
 
 # ---------------- FAST SCRAPER ---------------- #
 
@@ -140,11 +164,14 @@ def scrape_fast(driver, keyword, city, csv_filename, counters):
             if web_el:
                 website = web_el[0].get_attribute("href")
 
+            # ✅ USE SHARE LINK INSTEAD OF current_url
+            share_link = get_share_link(driver)
+
             data = {
                 "name": name,
                 "phone": phone,
                 "website": website,
-                "googlemaps_link": driver.current_url,
+                "googlemaps_link": share_link,
                 "keyword": keyword,
                 "city": city
             }
