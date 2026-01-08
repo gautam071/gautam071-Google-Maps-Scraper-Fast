@@ -4,10 +4,7 @@ import time
 import re
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, StaleElementReferenceException
 
 # ---------------- CONFIG ---------------- #
@@ -38,51 +35,78 @@ def save_to_csv(data, filename):
 
 def setup_driver():
     options = Options()
-    # ⚠️ Disable headless while testing share link
-    # options.add_argument("--headless=new")
+    options.add_argument("--headless=new")
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-software-rasterizer")
     options.add_argument("--window-size=1920,1080")
 
     driver = webdriver.Chrome(options=options)
+    driver.set_page_load_timeout(60)
+
+    # Load Maps once (important for stability)
     driver.get("https://www.google.com/maps")
+    time.sleep(5)
+
     return driver
 
-# ---------------- SEARCH ---------------- #
+# ---------------- SEARCH (URL BASED) ---------------- #
 
 def search(driver, keyword, city):
-    print(f"\n🔍 {keyword} | {city}")
+    query = f"{keyword} in {city}"
+    print(f"\n🔍 {query}")
 
     try:
-        search_box = WebDriverWait(driver, 20).until(
-            EC.element_to_be_clickable((By.ID, "searchboxinput"))
-        )
-        search_box.clear()
-        search_box.send_keys(f"{keyword} in {city}")
-        search_box.send_keys(Keys.ENTER)
-
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.CLASS_NAME, "hfpxzc"))
-        )
-        time.sleep(2)
-
-    except TimeoutException:
-        print("❌ Search failed. Skipping.")
+        url = "https://www.google.com/maps/search/" + query.replace(" ", "+")
+        driver.get(url)
+        time.sleep(5)
+        return True
+    except Exception:
+        print("❌ URL search failed")
         return False
 
-    return True
+# ---------------- SAFE LISTINGS WAIT ---------------- #
+
+def wait_for_listings(driver, timeout=20):
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            listings = driver.find_elements(By.CLASS_NAME, "hfpxzc")
+            if listings:
+                return listings
+        except:
+            pass
+        time.sleep(0.5)
+    return []
+
+# ---------------- PANEL CHANGE WAIT ---------------- #
+
+def wait_for_place_change(driver, old_url, timeout=10):
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            if driver.current_url != old_url:
+                return True
+        except:
+            pass
+        time.sleep(0.3)
+    return False
 
 # ---------------- BUSINESS FILTER ---------------- #
 
 def is_relevant_business(name, driver):
     name_l = name.lower()
 
+    # Exclude ONLY obvious retail
     retail_pattern = r"\b(store|showroom|boutique|mall|fashion|clothing|apparel|wear)\b"
     if re.search(retail_pattern, name_l):
         return False
 
     try:
-        category_el = driver.find_elements(By.CSS_SELECTOR, "button[jsaction*='pane.rating.category']")
+        category_el = driver.find_elements(
+            By.CSS_SELECTOR, "button[jsaction*='pane.rating.category']"
+        )
         if category_el:
             cat = category_el[0].text.lower()
             if re.search(retail_pattern, cat):
@@ -92,62 +116,44 @@ def is_relevant_business(name, driver):
 
     return True
 
-# ---------------- SHARE LINK ---------------- #
-
-def get_share_link(driver):
-    """
-    Get Google Maps Share link for the currently opened place.
-    """
-    try:
-        share_btn = WebDriverWait(driver, 5).until(
-            EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, 'button[jsaction*="pane.share"]')
-            )
-        )
-        share_btn.click()
-
-        link_input = WebDriverWait(driver, 5).until(
-            EC.presence_of_element_located(
-                (By.CSS_SELECTOR, 'input[aria-label="Link to share"]')
-            )
-        )
-
-        share_link = link_input.get_attribute("value")
-
-        # Close share dialog
-        link_input.send_keys(Keys.ESCAPE)
-        time.sleep(0.3)
-
-        return share_link.strip()
-
-    except Exception:
-        return ""
-
-# ---------------- FAST SCRAPER ---------------- #
+# ---------------- FAST SCRAPER (CRASH SAFE) ---------------- #
 
 def scrape_fast(driver, keyword, city, csv_filename, counters):
-    try:
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.CLASS_NAME, "hfpxzc"))
-        )
-    except TimeoutException:
+
+    listings = wait_for_listings(driver)
+    if not listings:
         print("❌ No listings found")
         return
 
-    listings = driver.find_elements(By.CLASS_NAME, "hfpxzc")
     print(f"➡️ Total listings found: {len(listings)}")
 
-    for place in listings:
+    for i in range(len(listings)):
         try:
-            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", place)
+            # Always refetch listings (DOM changes constantly)
+            listings = driver.find_elements(By.CLASS_NAME, "hfpxzc")
+            if i >= len(listings):
+                break
+
+            place = listings[i]
+
+            driver.execute_script(
+                "arguments[0].scrollIntoView({block:'center'});", place
+            )
             time.sleep(0.5)
+
+            old_url = driver.current_url
             driver.execute_script("arguments[0].click();", place)
 
-            WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.CLASS_NAME, "DUwDvf"))
-            )
+            # ✅ CRITICAL: wait until panel switches
+            if not wait_for_place_change(driver, old_url):
+                counters["skipped"] += 1
+                print("⚠️ Skipped (panel did not change)")
+                continue
 
-            name = driver.find_element(By.CLASS_NAME, "DUwDvf").text.strip()
+            time.sleep(1)
+
+            name_el = driver.find_element(By.CLASS_NAME, "DUwDvf")
+            name = name_el.text.strip()
 
             if not is_relevant_business(name, driver):
                 counters["excluded"] += 1
@@ -164,14 +170,11 @@ def scrape_fast(driver, keyword, city, csv_filename, counters):
             if web_el:
                 website = web_el[0].get_attribute("href")
 
-            # ✅ USE SHARE LINK INSTEAD OF current_url
-            share_link = get_share_link(driver)
-
             data = {
                 "name": name,
                 "phone": phone,
                 "website": website,
-                "googlemaps_link": share_link,
+                "googlemaps_link": driver.current_url,
                 "keyword": keyword,
                 "city": city
             }
@@ -184,7 +187,7 @@ def scrape_fast(driver, keyword, city, csv_filename, counters):
 
         except (TimeoutException, StaleElementReferenceException):
             counters["skipped"] += 1
-            print("⚠️ Skipped (panel issue)")
+            print("⚠️ Skipped (panel error)")
             continue
 
 # ---------------- MAIN ---------------- #
