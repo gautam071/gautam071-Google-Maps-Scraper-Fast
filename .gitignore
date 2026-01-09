@@ -1,8 +1,10 @@
 # Ignore specific data file
 places_data.csv
+data/
 
 #Variable Places
 config.json
+progress.json
 
 #Own Use File 
 Needed to run.txt

@@ -5,7 +5,14 @@ import re
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import TimeoutException, StaleElementReferenceException
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException
+
+# ---------------- GLOBAL DEDUPE ---------------- #
+
+SEEN_BUSINESSES = set()
+SEEN_LINKS = set()
 
 # ---------------- CONFIG ---------------- #
 
@@ -24,7 +31,6 @@ def save_to_csv(data, filename):
         "keyword",
         "city"
     ]
-
     with open(filename, "a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         if f.tell() == 0:
@@ -39,131 +45,137 @@ def setup_driver():
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-software-rasterizer")
     options.add_argument("--window-size=1920,1080")
 
     driver = webdriver.Chrome(options=options)
     driver.set_page_load_timeout(60)
-
-    # Load Maps once (important for stability)
     driver.get("https://www.google.com/maps")
-    time.sleep(5)
-
     return driver
 
 # ---------------- SEARCH (URL BASED) ---------------- #
 
 def search(driver, keyword, city):
-    query = f"{keyword} in {city}"
-    print(f"\n🔍 {query}")
+    query = f"{keyword} in {city}".replace(" ", "+")
+    url = f"https://www.google.com/maps/search/{query}"
+    print(f"\n🔍 {keyword} | {city}")
 
     try:
-        url = "https://www.google.com/maps/search/" + query.replace(" ", "+")
         driver.get(url)
-        time.sleep(5)
+        WebDriverWait(driver, 20).until(
+            EC.presence_of_element_located((By.TAG_NAME, "body"))
+        )
+        time.sleep(4)
         return True
-    except Exception:
-        print("❌ URL search failed")
+    except:
+        print("❌ Page load failed")
         return False
 
-# ---------------- SAFE LISTINGS WAIT ---------------- #
+# ---------------- SCROLL RESULTS PANEL ---------------- #
 
-def wait_for_listings(driver, timeout=20):
+def scroll_results_panel(driver, max_scrolls=20, pause=1.5):
+    """
+    Scroll feed if available.
+    If feed does not exist, return visible listings safely.
+    """
+
+    listings = driver.find_elements(By.CLASS_NAME, "hfpxzc")
+
+    try:
+        panel = driver.find_element(By.CSS_SELECTOR, 'div[role="feed"]')
+    except:
+        return listings  # non-feed layout
+
+    last_count = len(listings)
+
+    for _ in range(max_scrolls):
+        driver.execute_script(
+            "arguments[0].scrollTop = arguments[0].scrollHeight",
+            panel
+        )
+        time.sleep(pause)
+
+        listings = driver.find_elements(By.CLASS_NAME, "hfpxzc")
+        if len(listings) == last_count:
+            break
+        last_count = len(listings)
+
+    return listings
+
+# ---------------- FILTERS ---------------- #
+
+def is_temporarily_closed(place):
+    try:
+        return "temporarily closed" in place.text.lower()
+    except:
+        return False
+
+def is_relevant_business(name):
+    retail_pattern = r"\b(store|showroom|boutique|mall|fashion|clothing|apparel|wear)\b"
+    return not re.search(retail_pattern, name.lower())
+
+# ---------------- WAIT FOR PANEL CHANGE ---------------- #
+
+def wait_for_place_change(driver, old_url, timeout=8):
     end = time.time() + timeout
     while time.time() < end:
-        try:
-            listings = driver.find_elements(By.CLASS_NAME, "hfpxzc")
-            if listings:
-                return listings
-        except:
-            pass
-        time.sleep(0.5)
-    return []
-
-# ---------------- PANEL CHANGE WAIT ---------------- #
-
-def wait_for_place_change(driver, old_url, timeout=10):
-    end = time.time() + timeout
-    while time.time() < end:
-        try:
-            if driver.current_url != old_url:
-                return True
-        except:
-            pass
+        if driver.current_url != old_url:
+            return True
         time.sleep(0.3)
     return False
 
-# ---------------- BUSINESS FILTER ---------------- #
-
-def is_relevant_business(name, driver):
-    name_l = name.lower()
-
-    # Exclude ONLY obvious retail
-    retail_pattern = r"\b(store|showroom|boutique|mall|fashion|clothing|apparel|wear)\b"
-    if re.search(retail_pattern, name_l):
-        return False
-
-    try:
-        category_el = driver.find_elements(
-            By.CSS_SELECTOR, "button[jsaction*='pane.rating.category']"
-        )
-        if category_el:
-            cat = category_el[0].text.lower()
-            if re.search(retail_pattern, cat):
-                return False
-    except:
-        pass
-
-    return True
-
-# ---------------- FAST SCRAPER (CRASH SAFE) ---------------- #
+# ---------------- SCRAPER ---------------- #
 
 def scrape_fast(driver, keyword, city, csv_filename, counters):
 
-    listings = wait_for_listings(driver)
+    listings = scroll_results_panel(driver)
     if not listings:
-        print("❌ No listings found")
+        print("⚠️ No listings visible for this keyword")
         return
 
-    print(f"➡️ Total listings found: {len(listings)}")
+    print(f"➡️ Listings loaded: {len(listings)}")
 
-    for i in range(len(listings)):
+    for place in listings:
         try:
-            # Always refetch listings (DOM changes constantly)
-            listings = driver.find_elements(By.CLASS_NAME, "hfpxzc")
-            if i >= len(listings):
-                break
+            name = place.get_attribute("aria-label")
+            link = place.get_attribute("href")
 
-            place = listings[i]
+            if not name or not link:
+                continue
 
-            driver.execute_script(
-                "arguments[0].scrollIntoView({block:'center'});", place
-            )
-            time.sleep(0.5)
+            name_key = name.lower().strip()
 
+            # 1️⃣ Skip duplicates
+            if name_key in SEEN_BUSINESSES or link in SEEN_LINKS:
+                continue
+
+            # 2️⃣ Skip temporarily closed
+            if is_temporarily_closed(place):
+                continue
+
+            # 3️⃣ Skip retail
+            if not is_relevant_business(name):
+                counters["excluded"] += 1
+                continue
+
+            # Click only when needed
             old_url = driver.current_url
             driver.execute_script("arguments[0].click();", place)
 
-            # ✅ CRITICAL: wait until panel switches
             if not wait_for_place_change(driver, old_url):
                 counters["skipped"] += 1
-                print("⚠️ Skipped (panel did not change)")
                 continue
 
             time.sleep(1)
-
-            name_el = driver.find_element(By.CLASS_NAME, "DUwDvf")
-            name = name_el.text.strip()
-
-            if not is_relevant_business(name, driver):
-                counters["excluded"] += 1
-                print(f"⏭️ Excluded retail: {name}")
-                continue
 
             phone = ""
             phone_el = driver.find_elements(By.CSS_SELECTOR, '[data-item-id^="phone"]')
             if phone_el:
                 phone = phone_el[0].text.strip()
+
+            # 4️⃣ Skip if no phone
+            if not phone:
+                counters["skipped"] += 1
+                continue
 
             website = ""
             web_el = driver.find_elements(By.CSS_SELECTOR, 'a[data-item-id="authority"]')
@@ -171,7 +183,7 @@ def scrape_fast(driver, keyword, city, csv_filename, counters):
                 website = web_el[0].get_attribute("href")
 
             data = {
-                "name": name,
+                "name": name.strip(),
                 "phone": phone,
                 "website": website,
                 "googlemaps_link": driver.current_url,
@@ -180,14 +192,17 @@ def scrape_fast(driver, keyword, city, csv_filename, counters):
             }
 
             save_to_csv(data, csv_filename)
+
+            SEEN_BUSINESSES.add(name_key)
+            SEEN_LINKS.add(link)
+
             counters["saved"] += 1
             print(f"✅ Saved: {name}")
 
-            time.sleep(1)
+            time.sleep(0.8)
 
-        except (TimeoutException, StaleElementReferenceException):
+        except:
             counters["skipped"] += 1
-            print("⚠️ Skipped (panel error)")
             continue
 
 # ---------------- MAIN ---------------- #
@@ -198,11 +213,7 @@ def main():
     locations = config["target_locations"]
     csv_filename = config["csv_filename"]
 
-    counters = {
-        "saved": 0,
-        "excluded": 0,
-        "skipped": 0
-    }
+    counters = {"saved": 0, "excluded": 0, "skipped": 0}
 
     driver = setup_driver()
 
@@ -214,9 +225,9 @@ def main():
     driver.quit()
 
     print("\n🎯 SCRAPING COMPLETED")
-    print(f"✅ Saved (textile units): {counters['saved']}")
+    print(f"✅ Saved: {counters['saved']}")
     print(f"⏭️ Excluded retail: {counters['excluded']}")
-    print(f"⚠️ Skipped (errors): {counters['skipped']}")
+    print(f"⚠️ Skipped: {counters['skipped']}")
 
 # ---------------- RUN ---------------- #
 
