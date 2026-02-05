@@ -1,4 +1,4 @@
-import json, csv, time
+import json, csv, time, re
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
@@ -40,6 +40,15 @@ def setup_driver():
     options.add_argument("--window-size=1920,1080")
     return webdriver.Chrome(options=options)
 
+def restart_driver(driver):
+    try:
+        driver.quit()
+    except:
+        pass
+    print("🧊 Cooling down before browser restart...")
+    time.sleep(10)
+    return setup_driver()
+
 # ---------------- SCROLL ---------------- #
 
 def scroll_results(driver, max_scrolls=15):
@@ -70,12 +79,65 @@ def save_row(row, filename):
             writer.writeheader()
         writer.writerow(row)
 
+# ---------------- CATEGORY-BASED FILTER ---------------- #
+
+RETAIL_PATTERN = re.compile(
+    r"\b(store|showroom|boutique|mall|fashion|clothing|apparel|wear)\b",
+    re.IGNORECASE
+)
+
+def is_temporarily_closed(place):
+    try:
+        return "temporarily closed" in place.text.lower()
+    except:
+        return False
+
+
+def is_relevant_business(place):
+    """
+    PRIMARY: Google Maps category (button.DkEaL[jsaction*='.category'])
+    FALLBACK: business name
+    """
+
+    # 1️⃣ CATEGORY CHECK (PRIMARY & MOST ACCURATE)
+    try:
+        category_buttons = place.find_elements(
+            By.CSS_SELECTOR,
+            "button.DkEaL[jsaction*='.category']"
+        )
+
+        if category_buttons:
+            category_text = category_buttons[0].text.lower()
+
+            # Exclude retail-only categories
+            if RETAIL_PATTERN.search(category_text):
+                return False
+
+            # Non-retail category → accept immediately
+            return True
+    except:
+        pass
+
+    # 2️⃣ NAME CHECK (FALLBACK ONLY)
+    try:
+        name = place.get_attribute("aria-label") or ""
+        if RETAIL_PATTERN.search(name.lower()):
+            return False
+    except:
+        pass
+
+    # Default: allow
+    return True
+
 # ---------------- MAIN ---------------- #
 
 def main():
     cfg = load_config()
     progress = load_progress()
     driver = setup_driver()
+
+    processed_in_session = 0
+    MAX_PER_SESSION = 25   # safe limit
 
     for keyword in cfg["categories"]:
         for city in cfg["target_locations"]:
@@ -100,6 +162,14 @@ def main():
                 name = place.get_attribute("aria-label")
                 link = place.get_attribute("href")
 
+                # ❌ Skip temporarily closed businesses
+                if is_temporarily_closed(place):
+                    continue
+
+                # ❌ Skip retail / fashion businesses
+                if not is_relevant_business(name):
+                    continue
+
                 if not name or not link:
                     continue
 
@@ -120,6 +190,14 @@ def main():
                 SEEN_NAMES.add(name_key)
 
             save_progress(query_key)
+            processed_in_session += 1
+
+            # 🔄 Preventive browser restart
+            if processed_in_session >= MAX_PER_SESSION:
+                print("🔄 Preventive browser restart")
+                driver = restart_driver(driver)
+                processed_in_session = 0
+
             time.sleep(cfg["cooldown_between_searches"])
 
     driver.quit()

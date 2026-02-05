@@ -58,7 +58,8 @@ def restart_driver(driver):
         driver.quit()
     except:
         pass
-    time.sleep(8)
+    print("🧊 Cooling down before browser restart...")
+    time.sleep(10)
     return setup_driver()
 
 # ---------------- CSV SAVE ---------------- #
@@ -77,6 +78,9 @@ def main():
     cfg = load_config()
     progress = load_progress()
     driver = setup_driver()
+
+    processed_in_session = 0
+    MAX_PER_SESSION = 15   # safer for detail pages
 
     with open(cfg["harvest_file"], newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -97,7 +101,8 @@ def main():
                     driver.get(link)
                     success = True
                     break
-                except InvalidSessionIdException:
+                except (InvalidSessionIdException, Exception):
+                    print("⚠️ Browser crashed, restarting driver...")
                     driver = restart_driver(driver)
 
             if not success:
@@ -139,7 +144,15 @@ def main():
             SEEN_NAMES.add(name_key)
             save_progress(link)
 
+            processed_in_session += 1
             print(f"✅ Enriched: {row['name']}")
+
+            # 🔄 Preventive browser restart
+            if processed_in_session >= MAX_PER_SESSION:
+                print("🔄 Preventive browser restart")
+                driver = restart_driver(driver)
+                processed_in_session = 0
+
             time.sleep(cfg["cooldown_between_clicks"])
 
     driver.quit()
